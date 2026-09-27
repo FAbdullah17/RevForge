@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+opencode.json
+refs/
+
+# RevForge runtime state (regenerates from seed)
+*.db
+data/revforge.db
