@@ -104,14 +104,24 @@ def build_cohort(
             "signals_checked": len(signals),
             "company_ids": [c["company_id"] for c in treatment],
             "contact_ids": [c["id"] for c in treatment],
+            "contacts": [_slim(c) for c in treatment],
         },
         "control": {
             "n": len(control),
             "companies_searched": len(baseline),
             "company_ids": [c["company_id"] for c in control],
             "contact_ids": [c["id"] for c in control],
+            "contacts": [_slim(c) for c in control],
         },
     }
+
+
+def _slim(c: dict[str, Any]) -> dict[str, Any]:
+    """Contact fields worth persisting on the experiment snapshot."""
+    return {k: c.get(k, "") for k in (
+        "id", "company_id", "company", "title", "email", "linkedin_url",
+        "first_name", "last_name", "verified",
+    )}
 
 
 def transport() -> str:
@@ -119,18 +129,78 @@ def transport() -> str:
     return graph8.transport()
 
 
-def launch_campaign(exp_id: str, treatment_ids: list[str], control_ids: list[str]) -> dict[str, str]:
+def live_transport() -> bool:
+    """True when calls really reach graph8 (not mock)."""
+    return not graph8._use_mock()
+
+
+def sequence_enrolled(sequence_id: str) -> int:
+    """Enrolled member count of a staged sequence (dry-fire sent count)."""
+    return len(graph8._live_sequence_contacts(sequence_id))
+
+
+def launch_campaign(exp_id: str, treatment: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
     """Create graph8 lists + campaign for both cohorts.
 
     Two lists keep treatment/control attributable; one campaign executes
     the treatment motion while the control rides the baseline motion.
-    Returns list + campaign ids (deterministic under mock).
+    On live transport this also runs the enrichment chain (assert into
+    the lists, unlock, verify) and stages one drafted sequence per group
+    with members enrolled — sequences are never run (dry-fire only).
+    Returns ids, enrichment spend, and merged contact snapshots.
     """
-    t_list = graph8.create_list(treatment_ids, name=f"{exp_id}-treatment")
-    c_list = graph8.create_list(control_ids, name=f"{exp_id}-control")
+    t_list = graph8.create_list(treatment.get("contact_ids", []), name=f"{exp_id}-treatment")
+    c_list = graph8.create_list(control.get("contact_ids", []), name=f"{exp_id}-control")
     campaign = graph8.create_campaign(t_list["list_id"], name=exp_id)
-    return {
+    result: dict[str, Any] = {
         "treatment_list_id": t_list["list_id"],
         "control_list_id": c_list["list_id"],
         "campaign_id": campaign["campaign_id"],
     }
+    if graph8.transport() == "live":
+        if not treatment.get("contacts") or not control.get("contacts"):
+            raise ValueError(
+                "experiment snapshot has no contact rows; rebuild cohorts before launching"
+            )
+        result.update(_live_enrich_and_stage(
+            exp_id, t_list["list_id"], c_list["list_id"],
+            treatment.get("contacts", []), control.get("contacts", []),
+        ))
+    return result
+
+
+def _live_enrich_and_stage(exp_id: str, t_list_id: int, c_list_id: int,
+                           t_contacts: list[dict[str, Any]],
+                           c_contacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Live-only: enrich members and stage (never run) one sequence per group."""
+    from ..config import G8_OWNER_EMAIL
+
+    if not G8_OWNER_EMAIL:
+        raise ValueError("G8_OWNER_EMAIL is not set; sequences need a workspace owner email")
+
+    groups = {}
+    credits = 0
+    for label, list_id, rows in (("treatment", t_list_id, t_contacts),
+                                 ("control", c_list_id, c_contacts)):
+        asserted = graph8._live_assert_contacts(list_id, rows)
+        unlocked = graph8._live_unlock_list(list_id)
+        credits += int(unlocked.get("credits_charged", 0) or 0)
+        members = graph8._live_list_members(list_id)
+        pks = [m["pk"] for m in members if m["pk"] not in ("", None)]
+        verdicts = graph8._live_verify_pks(pks) if pks else {}
+        merged = []
+        for m in members:
+            merged.append({
+                "pk": m["pk"], "email": m["email"] or "",
+                "verified": bool(verdicts.get(m["pk"], False)),
+                "linkedin_url": m["linkedin_url"],
+                "first_name": m["first_name"], "last_name": m["last_name"],
+            })
+        seq_id = graph8._live_create_sequence(f"{exp_id}-{label}", list_id, G8_OWNER_EMAIL)
+        if pks:
+            graph8._live_enroll(seq_id, list_id, pks)
+        groups[label] = {
+            "list_id": list_id, "sequence_id": seq_id,
+            "asserted": asserted, "contacts": merged,
+        }
+    return {"groups": groups, "credits_spent": credits}

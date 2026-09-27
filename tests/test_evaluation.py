@@ -45,7 +45,7 @@ def test_deterministic():
 
 
 def _observed():
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     client.post("/api/hypotheses/H17/approve")
     exp_id = client.post("/api/hypotheses/H17/test", json={}).json()["experiment"]["id"]
@@ -90,7 +90,7 @@ def test_rejected_path_via_live_rows():
 
 def test_evaluate_guards_and_idempotency():
     assert client.post("/api/experiments/NOPE/evaluate").status_code == 404
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     client.post("/api/hypotheses/H17/approve")
     draft = client.post("/api/hypotheses/H17/test", json={}).json()["experiment"]["id"]

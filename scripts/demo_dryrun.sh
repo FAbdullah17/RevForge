@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # RevForge demo dry-run: full loop against a running server with assertions.
+# Dataset-agnostic: works on whatever fresh random history /api/seed drew.
 # Usage: scripts/demo_dryrun.sh [BASE_URL]
 # Exit non-zero on the first failed check. Resets to clean state at the end.
 #
 # Checks (product success criteria):
-#   1. discovery finds a pattern we did not encode (H17, lift > 1.2)
+#   1. discovery finds an unencoded pattern (top lift > 1.2, evidence coherent)
 #   2. hypothesis is explicit (pattern + evidence present)
 #   3. graph8 boundary executed (campaign id issued)
 #   4. measurable outcome collected (treatment + control rows)
-#   5. verdict computed from the result (Validated, lift 2.0)
-#   6. knowledge stored for future decisions (K17-1)
+#   5. verdict computed from the result (Validated, lift 2.0 on 50/50 fixtures)
+#   6. knowledge stored for future decisions
 set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:8000}"
@@ -31,28 +32,37 @@ assert d['mock_graph8'], 'refusing: server is LIVE; mock dry-run would mislead. 
 " || fail "not mock mode"
 pass "backend ok (mock mode confirmed)"
 
-echo "-- seed reset --"
-curl -s -X POST "$BASE/api/seed" > /dev/null || fail "seed"
+echo "-- seed: fresh random dataset --"
+curl -s -X POST "$BASE/api/seed" | $PY -c "
+import json,sys
+d = json.load(sys.stdin)
+print('  dataset:', d['dataset'])
+" || fail "seed"
 
 echo "-- 1+2. discover: unencoded pattern -> explicit hypothesis --"
 DISC=$(curl -s -X POST "$BASE/api/discover" -H 'Content-Type: application/json' -d '{"source":"seed","top_k":3}')
-echo "$DISC" | $PY -c "
+TOP=$(echo "$DISC" | $PY -c "
 import json,sys
 hyps = json.load(sys.stdin)['hypotheses']
-h17 = next(h for h in hyps if h['id'] == 'H17')
-assert h17['evidence']['lift'] > 1.2, h17
-assert h17['pattern']['tech'] == 'Salesforce' and h17['evidence']['wins'] == 23
-print('  H17 lift', h17['evidence']['lift'])
-" || fail "discovery"
-pass "discovery (H17 top, explicit evidence)"
+assert len(hyps) == 3
+top = hyps[0]
+ev = top['evidence']
+assert ev['lift'] > 1.2, ev
+assert 0 < ev['wins'] <= ev['support']
+assert abs(ev['rate'] - ev['wins'] / ev['support']) < 1e-3
+assert top['pattern']
+print(top['id'])
+print('  top:', top['id'], top['title'], 'lift', ev['lift'], file=sys.stderr)
+") || fail "discovery"
+pass "discovery (top pick coherent, lift > 1.2)"
 
 echo "-- approve + cohorts --"
-curl -s -X POST "$BASE/api/hypotheses/H17/approve" > /dev/null || fail "approve"
-EXP=$(curl -s -X POST "$BASE/api/hypotheses/H17/test" -H 'Content-Type: application/json' -d '{"treatment_n":50,"control_n":50}' \
-  | $PY -c "import json,sys; d=json.load(sys.stdin); t=d['cohort']['treatment']; assert t['companies_searched']==86 and t['n']==50; print(d['experiment']['id'])") \
+curl -s -X POST "$BASE/api/hypotheses/$TOP/approve" > /dev/null || fail "approve"
+EXP=$(curl -s -X POST "$BASE/api/hypotheses/$TOP/test" -H 'Content-Type: application/json' -d '{"treatment_n":50,"control_n":50}' \
+  | $PY -c "import json,sys; d=json.load(sys.stdin); t=d['cohort']['treatment']; assert t['companies_searched']>0 and t['n']==50; print(d['experiment']['id'])") \
   || fail "cohorts"
 echo "  experiment $EXP"
-pass "cohorts (86 co -> 50/50)"
+pass "cohorts (50/50)"
 
 echo "-- 3. graph8 execution --"
 CMP=$(curl -s -X POST "$BASE/api/experiments/$EXP/launch" \
@@ -78,9 +88,9 @@ curl -s -X POST "$BASE/api/experiments/$EXP/evaluate" \
 import json,sys
 d = json.load(sys.stdin)
 assert d['verdict']['verdict'] == 'Validated' and d['verdict']['lift'] == 2.0, d['verdict']
-assert d['knowledge']['id'] == 'K17-1' and d['knowledge']['verdict'] == 'Validated'
+assert d['knowledge']['hypothesis_id'] == '$TOP' and d['knowledge']['verdict'] == 'Validated'
 " || fail "evaluate"
-pass "verdict VALIDATED 2.0x, K17-1 stored"
+pass "verdict VALIDATED 2.0x, knowledge stored"
 
 echo "-- reset to clean demo state --"
 curl -s -X POST "$BASE/api/seed" > /dev/null || fail "final reset"

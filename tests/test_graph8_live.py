@@ -41,3 +41,32 @@ def test_live_create_then_delete_campaign():
     assert cmp_["campaign_id"]
     deleted = graph8._live("DELETE", f"/campaigns/{cmp_['campaign_id']}")
     assert deleted is not None
+
+
+def test_live_enrich_chain_two_contacts():
+    from backend.config import G8_OWNER_EMAIL
+
+    lst = graph8.create_list(["x"], name="pytest-enrich")
+    list_id = int(lst["list_id"])
+    rows = [
+        {"first_name": "Michael", "last_name": "Cascio",
+         "linkedin_url": "linkedin.com/in/michael-cascio-7839a33",
+         "company_id": "iac.com", "title": "Vp Sales"},
+        {"first_name": "Mike", "last_name": "Zaret",
+         "linkedin_url": "", "company_id": "", "title": "Sales"},
+    ]
+    asserted = graph8._live_assert_contacts(list_id, rows)
+    assert asserted.get("created", 0) >= 1
+    unlocked = graph8._live_unlock_list(list_id)
+    assert unlocked.get("credits_charged", 0) >= 0
+    members = graph8._live_list_members(list_id)
+    assert len(members) >= 1 and all("pk" in m for m in members)
+    verdicts = graph8._live_verify_pks([m["pk"] for m in members if m["pk"]])
+    assert isinstance(verdicts, dict)
+    seq_id = graph8._live_create_sequence("pytest-enrich", list_id, G8_OWNER_EMAIL)
+    pks = [m["pk"] for m in members if m["pk"]]
+    if pks:
+        graph8._live_enroll(seq_id, list_id, pks)
+        assert set(graph8._live_sequence_contacts(seq_id)) >= set(pks)
+    archived = graph8.archive_sequence(seq_id)
+    assert archived.get("status") in ("archived", None) or archived

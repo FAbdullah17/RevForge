@@ -17,8 +17,8 @@ const state = {
   knowledge: [],
 };
 
-const SCREENS = ["discover", "hypothesis", "test", "results"];
-const STAGES = ["Find", "Rank", "Test", "Launch", "Results in", "Decide", "Remember"];
+const SCREENS = ["data", "discover", "hypothesis", "test", "results"];
+const STAGES = ["Get data", "Find", "Rank", "Test", "Launch", "Results in", "Decide", "Remember"];
 
 // Plain-English translations of pattern ingredients, so anyone can read a bet.
 function patternPlain(pattern) {
@@ -40,6 +40,9 @@ function patternPlain(pattern) {
 
 function meaningSentence(verdict, lift, tRate, cRate) {
   const t = (tRate * 100).toFixed(1), c = (cRate * 100).toFixed(1);
+  if (tRate === 0 && cRate === 0) {
+    return `Nobody replied in either group — not even ordinary customers. That points at the message or delivery, not the targeting. Fix outreach first, then retest.`;
+  }
   if (verdict === "Validated") {
     return `This customer type replied ${lift}x more often (${t}% vs ${c}%). In plain terms: for every 100 you contact, expect about ${Math.round(t)} replies instead of ${Math.round(c)}. Worth chasing.`;
   }
@@ -55,6 +58,11 @@ function showError(msg) {
   const el = $("err");
   el.textContent = msg;
   el.classList.remove("hidden");
+  // Any in-flight action button unlocks: the user can read the error and retry.
+  for (const id of ["launch", "sync", "eval", "build", "approve"]) {
+    const b = $(id);
+    if (b) b.disabled = false;
+  }
 }
 
 function clearError() {
@@ -126,12 +134,14 @@ function latestExp(h) {
 async function refreshAll() {
   // Reload everything before rendering: banners derive from this state,
   // so a sync-after-evaluate (observed again) shows correctly, not stale.
-  const [h, e, k] = await Promise.all([
+  const [h, e, k, s] = await Promise.all([
     api("/api/hypotheses"), api("/api/experiments"), api("/api/knowledge"),
+    api("/api/stats"),
   ]);
   state.hypotheses = h.hypotheses || [];
   state.experiments = e.experiments || [];
   state.knowledge = k.knowledge || [];
+  state.stats = s.stats || { n: 0, won: 0, lost: 0, win_rate: 0 };
   if (state.hypotheses.length && !activeHypothesis()) {
     state.selectedId = state.hypotheses[0].id;
   }
@@ -140,30 +150,46 @@ async function refreshAll() {
 function stageIndex() {
   const h = activeHypothesis();
   if (!h) return 0;
-  if (["Validated", "Rejected", "Inconclusive"].includes(h.status)) return 6;
+  if (["Validated", "Rejected", "Inconclusive"].includes(h.status)) return 7;
   const exp = latestExp(h);
-  if (exp && exp.status === "evaluated") return 5;
-  if (exp && exp.status === "observed") return 4;
-  if (exp) return 3;
-  if (h.status === "Testing") return 2;
-  if (h.status === "Prioritized") return 1;
-  return 0;
+  if (exp && exp.status === "evaluated") return 6;
+  if (exp && exp.status === "observed") return 5;
+  if (exp) return 4;
+  if (h.status === "Testing") return 3;
+  if (h.status === "Prioritized") return 2;
+  return 1;
+}
+
+function unlockedScreens() {
+  // Strict order: each screen unlocks only when the previous stage produced
+  // something. Nothing downstream ever renders ahead of its turn.
+  const done = { data: true };
+  done.discover = state.dataFetched && ((state.stats && state.stats.n > 0) || state.hypotheses.length > 0);
+  done.hypothesis = state.hypotheses.length > 0;
+  done.test = state.hypotheses.some((h) => h.status !== "Candidate") || state.experiments.length > 0;
+  done.results = state.knowledge.length > 0 ||
+    state.experiments.some((e) => e.status === "observed" || e.status === "evaluated");
+  return done;
 }
 
 function renderChrome() {
   const idx = stageIndex();
-  const colors = ["bg-emerald-600", "bg-sky-600", "bg-sky-600", "bg-amber-600", "bg-amber-600", "bg-violet-600", "bg-violet-600"];
+  const colors = ["bg-emerald-600", "bg-emerald-600", "bg-sky-600", "bg-sky-600", "bg-amber-600", "bg-amber-600", "bg-violet-600", "bg-violet-600"];
   $("stepper").innerHTML = STAGES.map((s, i) =>
     `<li class="px-2 py-1 rounded-full font-medium ${i <= idx ? colors[i] : "bg-slate-800 text-slate-500"}">${s}</li>`
   ).join("");
   document.querySelectorAll("#tabs a").forEach((x) => {
     const on = x.dataset.tab === state.screen;
-    x.className = `px-3 py-2 rounded-lg text-center text-sm font-semibold ${on ? "bg-emerald-600" : "bg-slate-800"}`;
+    const open = (unlockedScreens()[x.dataset.tab]);
+    x.className = `px-3 py-2 rounded-lg text-center text-sm font-semibold ${on ? "bg-emerald-600" : open ? "bg-slate-800" : "bg-slate-900 text-slate-600"}`;
+    x.dataset.locked = open ? "" : "1";
   });
   const h = activeHypothesis();
   let msg;
   if (!state.hypotheses.length) {
-    msg = `👉 Press <b>Find patterns</b> below — RevForge looks at your past wins.`;
+    msg = state.dataFetched && state.stats && state.stats.n > 0
+      ? `👉 Fresh deals loaded (${state.stats.n} total) — continue under <b>Find patterns</b>.`
+      : `👉 Start on <b>Get data</b> — press <b>Fetch data</b> for your first batch of past deals.`;
   } else if (h && h.status === "Candidate") {
     msg = `👉 Reviewing <b>${h.id}</b> — press <b>Test this bet</b>. Nothing is sent yet.`;
   } else if (h && h.status === "Prioritized") {
@@ -174,7 +200,9 @@ function renderChrome() {
     else if (exp.status === "draft") msg = `👉 Under Run the test: press <b>Start outreach</b> — creates the real customer list + campaign.`;
     else if (exp.status === "launched") msg = `👉 Under Run the test: press <b>Collect results</b>, then <b>Get the result</b>.`;
     else if (exp.status === "observed") msg = `👉 Press <b>Get the result</b> — test group vs comparison group decides.`;
-    else if (["Validated", "Rejected", "Inconclusive"].includes(h.status)) msg = `✅ <b>${h.id}: ${h.status}</b> — learning saved. Open <b>Results</b> and click it.`;
+    else if (["Validated", "Rejected", "Inconclusive"].includes(h.status)) msg = state.screen === "results"
+      ? `✅ <b>${h.id}: ${h.status}</b> — click a learning below for the full story.`
+      : `✅ <b>${h.id}: ${h.status}</b> — learning saved. Open <b>Results</b> and click it.`;
     else msg = `👉 Under Run the test: continue — start, collect, decide.`;
   } else {
     msg = `👉 Press <b>Find patterns</b> to begin.`;
@@ -183,7 +211,7 @@ function renderChrome() {
 }
 
 async function showTab(name) {
-  if (!SCREENS.includes(name)) name = "discover";
+  if (!SCREENS.includes(name)) name = "data";
   state.screen = name;
   for (const v of SCREENS) $(`view-${v}`).classList.add("hidden");
   $(`view-${name}`).classList.remove("hidden");
@@ -197,6 +225,7 @@ async function showTab(name) {
     showError(String(e.message || e));
   }
   renderChrome();
+  if (name === "data") renderData();
   if (name === "discover") renderDiscover();
   if (name === "hypothesis") renderHypothesis();
   if (name === "test") renderTest();
@@ -208,15 +237,72 @@ function go(name) {
   window.scrollTo(0, 0);
 }
 
+// ---------------------------------------------------------------- screen: get data
+
+async function renderData() {
+  const el = $("view-data");
+  // Session rule: numbers appear only AFTER you fetch in this session.
+  // Leftover rows from earlier runs stay invisible until then.
+  let statsHtml = `<p class="text-sm text-slate-400 mt-3">No deals loaded yet — press <b>Fetch data</b> for your first batch.</p>`;
+  if (state.dataFetched) {
+    try {
+      const s = (await api("/api/stats")).stats;
+      state.stats = s;
+      statsHtml = s.n > 0
+        ? `<div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+          ${stat("past deals", s.n)}
+          ${stat("won", s.won, "text-emerald-300")}
+          ${stat("lost", s.lost)}
+          ${stat("win rate", `${(s.win_rate * 100).toFixed(1)}%`)}
+        </div>
+        <p class="text-xs text-slate-400 mt-2">Fresh mock batch — a new size and a new hidden winner every fetch.</p>`
+        : `<p class="text-sm text-slate-400 mt-3">No deals loaded yet — press <b>Fetch data</b> for your first batch.</p>`;
+    } catch (e) {
+      statsHtml = `<p class="text-sm text-slate-400 mt-3">Stats unavailable — fetch data first.</p>`;
+    }
+  }
+  el.innerHTML = `${screenHead("Get fresh past deals", "every run starts here → then find patterns")}
+    <p class="text-sm text-slate-300 mt-2">RevForge learns from <b>past deals</b>. Fetch a brand-new random batch, then move on to finding patterns in it.</p>
+    <div class="mt-3 flex gap-2">
+      <button id="fetch" class="px-5 py-2 rounded-lg bg-emerald-600 font-bold hover:bg-emerald-500">Fetch data</button>
+    </div>
+    <div id="ds-stats">${statsHtml}</div>${screenFoot("")}`;
+  $("fetch").addEventListener("click", async (ev) => {
+    const btn = ev.target;
+    btn.disabled = true;
+    btn.textContent = "Fetching…";
+    try {
+      clearError();
+      await api("/api/seed", { method: "POST" });
+      state.selectedId = null;
+      state.selectedKnowledge = null;
+      state.hypotheses = [];
+      state.experiments = [];
+      state.knowledge = [];
+      state.dataFetched = true;
+      await refreshAll();
+      renderChrome();
+      renderData();
+    } catch (e) {
+      showError(String(e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Fetch data";
+    }
+  });
+}
+
 // ---------------------------------------------------------------- screen: discover
 
 async function loadStats() {
+  const el = $("stats");
+  if (!el) return;  // discover screen not rendered yet
   try {
     const s = (await api("/api/stats")).stats;
-    $("stats").textContent =
+    el.textContent =
       `${s.n} past deals · ${s.won} won · ${s.lost} lost · ${(s.win_rate * 100).toFixed(1)}% win rate`;
   } catch (e) {
-    $("stats").textContent = "stats unavailable";
+    el.textContent = "stats unavailable";
     showError(String(e.message || e));
   }
 }
@@ -261,7 +347,6 @@ async function runDiscover(btn) {
     });
     state.hypotheses = j.hypotheses || [];
     if (state.hypotheses.length) state.selectedId = state.hypotheses[0].id;
-    $("out").textContent = `discovered ${state.hypotheses.length} patterns — top pick opened for review.`;
     go("hypothesis");
   } catch (e) {
     showError(String(e.message || e));
@@ -315,17 +400,19 @@ async function renderHypothesis() {
       ${stat("average rate", `${((e.baseline || 0) * 100).toFixed(1)}%`)}
       ${stat("edge", `${e.lift}x`, "text-emerald-300")}
     </div>
-    <p class="text-sm text-slate-300 mt-3">How new is this: <b>${fresh.novelty}</b>${fresh.novelty_reason ? ` — ${fresh.novelty_reason}` : ""}</p>
+    <p class="text-sm text-slate-300 mt-3">How new is this: <b>${fresh.novelty === "High" ? "Mostly new — overlaps your usual customers only on company size" : fresh.novelty === "Medium" ? "Partly new — shares some traits with your usual customers" : "Close to your usual customer profile"}</b></p>
     ${fresh.explanation ? `<p class="text-xs text-slate-400 mt-1">${fresh.explanation}</p>` : ""}
-    <p class="text-xs text-slate-400 mt-3 mb-1 font-semibold">RANK ${fresh.priority.toFixed(3)} — WHY IT RANKS HERE</p>
+    <p class="text-xs text-slate-400 mt-3 mb-1 font-semibold">RANK ${fresh.priority.toFixed(3)} — WHY IT RANKS HERE
+      <button id="rescore" class="ml-2 px-2 py-0.5 rounded bg-slate-700 text-slate-200">Re-score</button></p>
     <div class="grid md:grid-cols-2 gap-x-4">${breakdownBars(fresh.priority_breakdown)}</div>
-    <div class="mt-4 flex gap-2 items-center flex-wrap">
+    <p class="text-xs text-slate-400 mt-4 mb-1 font-semibold">RUN THE TEST — HOW MANY CUSTOMERS PER GROUP?</p>
+    <div class="mt-1 flex gap-2 items-center flex-wrap">
       ${canApprove ? `<button id="approve" class="px-5 py-2 rounded-lg bg-emerald-600 font-bold hover:bg-emerald-500">Test this bet →</button>` : ""}
-      <button id="rescore" class="px-4 py-2 rounded-lg bg-slate-700">Re-score</button>
-      ${canTest ? `<input id="tn" type="number" value="50" min="1" max="200" class="w-20 px-2 py-2 rounded-lg bg-slate-800 border border-slate-600" title="treatment n" />
-      <input id="cn" type="number" value="50" min="1" max="200" class="w-20 px-2 py-2 rounded-lg bg-slate-800 border border-slate-600" title="control n" />
+      ${canTest ? `<input id="tn" type="number" value="50" min="1" max="200" class="w-20 px-2 py-2 rounded-lg bg-slate-800 border border-slate-600" title="test group size" />
+      <input id="cn" type="number" value="50" min="1" max="200" class="w-20 px-2 py-2 rounded-lg bg-slate-800 border border-slate-600" title="comparison group size" />
       <button id="build" class="px-5 py-2 rounded-lg bg-sky-600 font-bold hover:bg-sky-500">Find test customers →</button>` : ""}
     </div>
+    <p class="text-xs text-slate-500 mt-1">30+ per group needed for a decisive result · live lookups cost ~1 credit each</p>
     <div id="cohort" class="mt-3"></div>${screenFoot("")}`;
   const ap = $("approve");
   if (ap) ap.addEventListener("click", () => approveHypothesis(fresh.id));
@@ -335,13 +422,14 @@ async function renderHypothesis() {
 }
 
 async function approveHypothesis(id) {
+  const btn = $("approve");
+  if (btn) btn.disabled = true;
   try {
     clearError();
     await api(`/api/hypotheses/${id}/approve`, { method: "POST" });
     await refreshAll();
     renderChrome();
     renderHypothesis();
-    $("out").textContent = `${id} approved → choose group sizes and Find test customers.`;
   } catch (e) {
     showError(String(e.message || e));
   }
@@ -360,6 +448,8 @@ async function rescoreHypothesis(id) {
 }
 
 async function buildCohorts(id) {
+  const btn = $("build");
+  if (btn) btn.disabled = true;
   const tn = parseInt($("tn").value, 10) || 50;
   const cn = parseInt($("cn").value, 10) || 50;
   $("cohort").innerHTML = `<p class="text-sm text-slate-400">Finding ${tn} test-group + ${cn} comparison-group customers…</p>`;
@@ -369,7 +459,6 @@ async function buildCohorts(id) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ treatment_n: tn, control_n: cn }),
     });
-    $("out").textContent = `experiment ${j.experiment.id} drafted with real cohorts.`;
     go("test");
   } catch (e) {
     $("cohort").innerHTML = "";
@@ -422,12 +511,12 @@ async function renderTest() {
     if (b) b.addEventListener("click", () => go("hypothesis"));
     return;
   }
-  let html = `${screenHead(`Experiment ${exp.id}`, `testing ${exp.hypothesis_id} · transport ${(exp.transport || "mock").toUpperCase()}`)}
+  let html = `${screenHead(`Test on ${exp.hypothesis_id}`, `live customer outreach, tracked here`)}
     <p class="mt-2">${statusBadge(exp.status)}</p>
     <div class="mt-3">${exp.cohort ? cohortHtml(exp.cohort, exp.id) : ""}</div>`;
   if (exp.status === "draft") html += `<button id="launch" class="mt-3 px-5 py-2 rounded-lg bg-amber-600 font-bold hover:bg-amber-500">Start outreach →</button>
     <p class="text-xs text-slate-400 mt-1">Creates the graph8 list + campaign. Live mode writes to your real workspace.</p>`;
-  if (exp.status !== "draft") html += `<p class="text-xs text-slate-400 mt-2">✓ Launched as <b>${exp.graph8_campaign_id}</b></p>`;
+  if (exp.status !== "draft") html += `<p class="text-xs text-emerald-300 mt-2">✓ Outreach started</p>`;
   if (exp.status === "launched") html += `<button id="sync" class="mt-2 px-5 py-2 rounded-lg bg-sky-600 font-bold hover:bg-sky-500">Collect results →</button>
     <p class="text-xs text-slate-400 mt-1">Demo path: SEEDED fixtures. Live path: graph8 webhooks feed real engagement.</p>`;
   if (exp.status === "observed") html += `<button id="eval" class="mt-2 px-5 py-2 rounded-lg bg-emerald-600 font-bold hover:bg-emerald-500">Get the result →</button>
@@ -449,10 +538,11 @@ async function renderTest() {
 }
 
 async function launchExperiment(expId) {
+  const btn = $("launch");
+  if (btn) btn.disabled = true;
   try {
     clearError();
     const j = await api(`/api/experiments/${expId}/launch`, { method: "POST" });
-    $("out").textContent = `launched ${j.experiment.graph8_campaign_id} — sync outcomes next.`;
     await refreshAll();
     renderChrome();
     renderTest();
@@ -462,10 +552,11 @@ async function launchExperiment(expId) {
 }
 
 async function syncOutcomes(expId) {
+  const btn = $("sync");
+  if (btn) btn.disabled = true;
   try {
     clearError();
     await api(`/api/experiments/${expId}/sync-outcomes`, { method: "POST" });
-    $("out").textContent = "replies collected (SEEDED demo data) — press Get the result.";
     await refreshAll();
     renderChrome();
     renderTest();
@@ -475,10 +566,11 @@ async function syncOutcomes(expId) {
 }
 
 async function evaluateExperiment(expId) {
+  const btn = $("eval");
+  if (btn) btn.disabled = true;
   try {
     clearError();
     const j = await api(`/api/experiments/${expId}/evaluate`, { method: "POST" });
-    $("out").textContent = `${j.verdict.verdict} (lift ${j.verdict.lift}x) — knowledge stored.`;
     await refreshAll();
     renderChrome();
     go("results");
@@ -496,11 +588,14 @@ function verdictHtml(v, results, hypId) {
   const c = results.find((x) => x.group === "control") || {};
   const icon = v.verdict === "Validated" ? "✓" : v.verdict === "Rejected" ? "✗" : "?";
   const headline = v.verdict === "Validated" ? "IT WORKS — bet proven" : v.verdict === "Rejected" ? "IT FAILED — bet disproven" : "UNCLEAR — test again";
+  const score = v.verdict === "Inconclusive"
+    ? `Treatment ${((t.rate || 0) * 100).toFixed(1)}% vs comparison ${((c.rate || 0) * 100).toFixed(1)}% — too close or too few people to call it (${v.reason}).`
+    : `Treatment ${((t.rate || 0) * 100).toFixed(1)}% vs comparison ${((c.rate || 0) * 100).toFixed(1)}% — that's <b>${v.lift}x</b>.`;
   return `<div class="p-4 mt-3 rounded-xl bg-slate-800 border-2 ${color}">
     <p class="font-bold text-lg">${icon} ${headline}</p>
-    <p class="text-sm mt-1">Test group replied ${((t.rate || 0) * 100).toFixed(1)}% of the time, comparison group ${((c.rate || 0) * 100).toFixed(1)}% — that's <b>${v.lift}x</b>.</p>
+    <p class="text-sm mt-1">${score}</p>
     <p class="text-sm mt-1">${meaningSentence(v.verdict, v.lift, t.rate || 0, c.rate || 0)}</p>
-    <p class="text-xs text-slate-400 mt-1">How sure are we? <b>${v.confidence}</b> — based on ${v.n_total} people contacted.${hypId ? ` Full breakdown: <button data-k="${hypId}" class="text-emerald-300 underline">open the learning →</button>` : ""}</p>
+    <p class="text-xs text-slate-400 mt-1">Based on ${v.n_total} people contacted.${hypId ? ` Full story: <button data-k="${hypId}" class="text-emerald-300 underline">open the learning →</button>` : ""}</p>
   </div>`;
 }
 
@@ -518,9 +613,9 @@ async function renderResults() {
     try {
       const rows = (await api(`/api/experiments/${exp.id}/results`)).results || [];
       const t = rows.find((x) => x.group === "treatment") || {};
-      if (t.verdict && t.verdict !== "Inconclusive") {
+      if (t.verdict) {
         verdict = verdictHtml(
-          { verdict: t.verdict, lift: t.lift || 0, reason: "stored verdict", confidence: "med",
+          { verdict: t.verdict, lift: t.lift || 0, reason: "stored verdict",
             n_total: rows.reduce((a, x) => a + (x.sent || 0), 0) }, rows);
       }
     } catch (e) {
@@ -536,13 +631,13 @@ async function renderResults() {
       const edge = k.verdict === "Validated" ? "border-emerald-600" : k.verdict === "Rejected" ? "border-red-600" : "border-amber-600";
       const plain = k.verdict === "Validated" ? "chase these customers" : k.verdict === "Rejected" ? "skip these customers" : "test again first";
       return `<button data-k="${k.hypothesis_id}" class="w-full text-left p-3 rounded-lg bg-slate-800 border ${edge} hover:border-emerald-400">
-        <p class="font-semibold">${icon} ${k.hypothesis_id} — ${statusBadge(k.verdict)} <span class="text-slate-400 text-xs">(surety: ${k.confidence})</span></p>
+        <p class="font-semibold">${icon} ${k.hypothesis_id} — ${statusBadge(k.verdict)} </p>
         <p class="text-sm text-slate-200 mt-1">Bottom line: <b>${plain}</b></p>
         <p class="text-xs text-emerald-400 mt-1 font-semibold">Why? Click for the full story →</p>
       </button>`;
     }).join("")}</div>
     <div id="kdetail" class="mt-3"></div>
-    <p class="text-sm text-slate-300 mt-3">Sales next step: contact 500 more customers shaped like each proven winner.</p>`
+    <p class="text-sm text-slate-300 mt-3">${kn.some((k) => k.verdict === "Validated") ? "Sales next step: contact 500 more customers shaped like each proven winner." : "No proven winners yet — validate a bet first, then scale it."}</p>`
     : `<p class="text-sm text-slate-400">Empty — every finished test lands here, wins and losses.</p>`}
     ${screenFoot("")}`;
   el.querySelectorAll("[data-k]").forEach((b) =>
@@ -571,7 +666,7 @@ function knowledgeDetail(k) {
     <ul class="mt-1">${traits.map((t) => `<li class="text-sm text-slate-200">✓ ${t}</li>`).join("")}</ul>
     <p class="text-xs text-slate-400 mt-2 font-semibold">WHAT IT MEANS FOR SALES</p>
     <p class="text-sm text-slate-200">${why}</p>
-    <p class="text-xs text-slate-400 mt-2">Surety: <b>${k.confidence}</b> (bigger tests = more sure) · ${statusBadge(k.verdict)}</p>
+    <p class="text-xs text-slate-400 mt-2">${statusBadge(k.verdict)}</p>
   </div>`;
 }
 
@@ -582,28 +677,36 @@ window.addEventListener("hashchange", () => {
   if (name !== state.screen) showTab(name);
 });
 
+document.querySelectorAll("#tabs a").forEach((x) => {
+  x.addEventListener("click", (e) => {
+    if (x.dataset.locked) {
+      e.preventDefault();
+      showError("That step is locked — finish the earlier steps first (follow the green banner).");
+    }
+  });
+});
+
 $("reset").addEventListener("click", async () => {
   try {
     clearError();
     await api("/api/seed", { method: "POST" });
+    // Clear ALL local state first: otherwise the stepper, banner, and
+    // hidden screens keep showing the previous run after reset.
     state.selectedId = null;
     state.selectedKnowledge = null;
-    $("out").textContent = "demo data reset.";
-    go("discover");
+    state.hypotheses = [];
+    state.experiments = [];
+    state.knowledge = [];
+    state.dataFetched = true;
+    for (const v of SCREENS) $(`view-${v}`).innerHTML = "";
+    renderChrome();
+    go("data");
   } catch (e) {
     showError(String(e.message || e));
   }
 });
 
 (async function init() {
-  try {
-    const h = await api("/health");
-    $("health").textContent = `backend ok · mock_graph8=${h.mock_graph8} · mock_llm=${h.mock_llm}`;
-    $("src").innerHTML = h.mock_graph8 ? srcBadge("seeded") : srcBadge("live");
-  } catch (e) {
-    $("health").textContent = "backend unreachable";
-    showError(String(e.message || e));
-  }
-  const start = (window.location.hash || "#/discover").replace("#/", "");
-  await showTab(SCREENS.includes(start) ? start : "discover");
+  const start = (window.location.hash || "#/data").replace("#/", "");
+  await showTab(SCREENS.includes(start) ? start : "data");
 })();

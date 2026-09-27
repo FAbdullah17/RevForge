@@ -156,11 +156,13 @@ def build_experiment(hyp_id: str, treatment_n: int = 50, control_n: int = 50) ->
             "filter": cohort["filter"],
             "company_ids": cohort["treatment"]["company_ids"],
             "contact_ids": cohort["treatment"]["contact_ids"],
+            "contacts": cohort["treatment"]["contacts"],
         },
         control={
             "n": cohort["control"]["n"],
             "company_ids": cohort["control"]["company_ids"],
             "contact_ids": cohort["control"]["contact_ids"],
+            "contacts": cohort["control"]["contacts"],
         },
     ).model_dump()
     exp["cohort"] = cohort  # full pipeline trace for the Test view
@@ -183,8 +185,10 @@ def _get_experiment(exp_id: str) -> tuple[dict, list[dict]]:
 
 def _save_experiment(exp: dict, exps: list[dict]) -> dict:
     out = _touch(Experiment(**exp).model_dump())
-    # Preserve the cohort snapshot (transport field, not part of the model).
+    # Preserve transport fields that live outside the model.
     out["cohort"] = exp.get("cohort", {})
+    if "credits_spent" in exp:
+        out["credits_spent"] = exp["credits_spent"]
     store.replace_all(
         "experiments", [out if e.get("id") == exp["id"] else e for e in exps]
     )
@@ -193,6 +197,9 @@ def _save_experiment(exp: dict, exps: list[dict]) -> dict:
 
 def launch(exp_id: str) -> dict:
     """Launch a draft experiment: graph8 lists + campaign. Draft -> Launched.
+
+    On live transport this also enriches members and stages (never runs)
+    one sequence per group; snapshots and ids persist on the experiment.
 
     Raises:
         KeyError: Unknown experiment.
@@ -203,23 +210,29 @@ def launch(exp_id: str) -> dict:
         raise ValueError(
             f"experiment {exp_id!r} is {exp.get('status')!r}, only 'draft' can launch"
         )
-    ids = execution.launch_campaign(
-        exp_id,
-        exp["treatment"].get("contact_ids", []),
-        exp["control"].get("contact_ids", []),
-    )
+    ids = execution.launch_campaign(exp_id, exp["treatment"], exp["control"])
     exp["treatment"]["list_id"] = ids["treatment_list_id"]
     exp["control"]["list_id"] = ids["control_list_id"]
     exp["graph8_campaign_id"] = ids["campaign_id"]
+    for label in ("treatment", "control"):
+        group = (ids.get("groups") or {}).get(label)
+        if group:
+            exp[label]["sequence_id"] = group["sequence_id"]
+            exp[label]["contacts_enriched"] = group["contacts"]
+    if "credits_spent" in ids:
+        exp["credits_spent"] = ids["credits_spent"]
     exp["status"] = "launched"
     exp["launched_at"] = datetime.now(timezone.utc).isoformat()
     return {"experiment": _save_experiment(exp, exps)}
 
 
 def sync_outcomes(exp_id: str) -> dict:
-    """Ingest mock (seeded) outcomes for a launched experiment.
+    """Collect outcomes for a launched experiment. Launched -> Observed.
 
-    Idempotent: re-sync rewrites the same rows. Moves Launched -> Observed.
+    Mock transport replays deterministic seeded fixtures. Live transport
+    reads staged-sequence enrollment as sent counts with zero engagement
+    (dry-fire: sequences are staged, never run) labeled source=live.
+    Idempotent: re-sync rewrites the same rows.
 
     Raises:
         KeyError: Unknown experiment.
@@ -230,14 +243,21 @@ def sync_outcomes(exp_id: str) -> dict:
         raise ValueError(
             f"experiment {exp_id!r} is {exp.get('status')!r}, launch it first"
         )
-    rows = [
-        Result(**outcomes.build_result(
-            exp_id, group,
-            outcomes.mock_outcomes(int(exp[group].get("n", 0)), group),
-            source="seeded",
-        )).model_dump()
-        for group in ("treatment", "control")
-    ]
+    live = exp.get("transport") == "live" and execution.live_transport()
+    rows = []
+    for group in ("treatment", "control"):
+        if live and exp[group].get("sequence_id"):
+            sent = execution.sequence_enrolled(exp[group]["sequence_id"])
+            if sent <= 0:
+                raise ValueError(
+                    f"{group} sequence has no enrolled members; launch did not stage anyone"
+                )
+            counts = {"sent": sent, "replies": 0, "positive": 0, "meetings": 0}
+            source = "live"
+        else:
+            counts = outcomes.mock_outcomes(int(exp[group].get("n", 0)), group)
+            source = "seeded"
+        rows.append(Result(**outcomes.build_result(exp_id, group, counts, source=source)).model_dump())
     stored = store.save_results(exp_id, rows)
     exp["status"] = "observed"
     return {"experiment": _save_experiment(exp, exps), "results": stored}

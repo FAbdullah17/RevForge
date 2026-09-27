@@ -15,10 +15,10 @@ def test_reset_twice_identical():
 
 def test_reset_restores_accounts_from_seed():
     counts = store.reset_all()
-    assert counts["accounts"] == 142
+    assert counts["accounts"] == 10000
     assert counts["hypotheses"] == 0
     rows = store.list_all("accounts")
-    assert len(rows) == 142
+    assert len(rows) == 10000
 
 
 def test_fresh_db_recreated(tmp_path):
@@ -35,13 +35,13 @@ def test_fresh_db_recreated(tmp_path):
 def test_loader_stats_match_seed():
     store.reset_all()
     s = data_loader.stats()
-    assert s == {"n": 142, "won": 87, "lost": 55, "win_rate": round(87 / 142, 4)}
+    assert s == {"n": 10000, "won": 6127, "lost": 3873, "win_rate": round(6127 / 10000, 4)}
 
 
 def test_loader_validates_and_exposes_frame():
     store.reset_all()
     df = data_loader.load_accounts_df()
-    assert len(df) == 142
+    assert len(df) == 10000
     for c in ("employees", "new_vp_sales", "sdr_openings", "tech", "intent", "outcome"):
         assert c in df.columns
     assert set(df["outcome"].unique()) <= {"won", "lost"}

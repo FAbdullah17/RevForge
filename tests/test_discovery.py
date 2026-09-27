@@ -19,8 +19,8 @@ def test_finds_seeded_h17_first():
     assert top.pattern.get("tech") == "Salesforce"
     assert top.pattern.get("intent") == "high"
     assert top.pattern.get("new_vp_sales") is True
-    assert top.n == 28
-    assert top.wins == 23
+    assert top.n == 2000
+    assert top.wins == 1640
     assert top.lift > 1.2
 
 

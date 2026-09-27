@@ -22,7 +22,7 @@ def get_hypothesis(hyp_id: str):
     for row in store.list_all("hypotheses"):
         if row.get("id") == hyp_id:
             return {"hypothesis": row}
-    raise HTTPException(status_code=404, detail=f"unknown hypothesis {hyp_id!r}")
+    raise HTTPException(status_code=404, detail=f"unknown hypothesis '{hyp_id}' — it may have been reset; start over from Find patterns")
 
 
 @router.post("/api/hypotheses/prioritize")
@@ -41,7 +41,7 @@ def prioritize_single(hyp_id: str):
     try:
         return {"ok": True, "hypothesis": pipeline.prioritize_one(hyp_id)}
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown hypothesis {hyp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown hypothesis '{hyp_id}' — it may have been reset; start over from Find patterns") from None
 
 
 @router.post("/api/hypotheses/{hyp_id}/approve")
@@ -50,6 +50,6 @@ def approve_hypothesis(hyp_id: str):
     try:
         return {"ok": True, "hypothesis": pipeline.approve(hyp_id)}
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown hypothesis {hyp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown hypothesis '{hyp_id}' — it may have been reset; start over from Find patterns") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

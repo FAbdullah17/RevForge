@@ -276,6 +276,8 @@ def _live_find_people(company_ids: list[str]) -> list[dict[str, Any]]:
                 "persona": "buyer",
                 "email": item.get("work_email") or "",
                 "linkedin_url": li,
+                "first_name": item.get("first_name") or "",
+                "last_name": item.get("last_name") or "",
             })
     return contacts
 
@@ -351,6 +353,96 @@ def _live_create_campaign(list_id: str, name: str) -> dict[str, Any]:
         "audience_list_id": list_id,
     })
     return {"campaign_id": _extract_id(payload, "campaign"), "list_id": list_id, "name": name}
+
+
+def _live_assert_contacts(list_id: int, contacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Import open-search contacts into a workspace list. Returns counts."""
+    rows = [{
+        "first_name": c.get("first_name") or "",
+        "last_name": c.get("last_name") or "",
+        "linkedin_url": c.get("linkedin_url") or "",
+        "company_domain": c.get("company_id") or "",
+        "job_title": c.get("title") or "",
+    } for c in contacts]
+    payload = _live("PUT", "/contacts/assert/batch",
+                    json={"list_id": list_id, "contacts": rows})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _live_unlock_list(list_id: int) -> dict[str, Any]:
+    """Unlock contact details for a list. Spends enrichment credits."""
+    payload = _live("POST", "/contacts/unlock-info", json={"list_id": list_id})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _live_list_members(list_id: int) -> list[dict[str, Any]]:
+    """Workspace contacts of a list (PKs + revealed emails) via xlsx export."""
+    import base64
+    from io import BytesIO
+
+    import pandas as pd
+
+    payload = _live("GET", f"/lists/{list_id}/download")
+    content = (payload or {}).get("content", "")
+    df = pd.read_excel(BytesIO(base64.b64decode(content)))
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    members = []
+    for _, row in df.iterrows():
+        rec = {k: ("" if pd.isna(v) else v) for k, v in row.items()}
+        pk = rec.get("id", rec.get("contact_id", rec.get("pk", "")))
+        members.append({
+            "pk": pk,
+            "email": rec.get("work_email", rec.get("email", "")),
+            "linkedin_url": rec.get("linkedin_url", rec.get("linkedin", "")),
+            "first_name": rec.get("first_name", ""),
+            "last_name": rec.get("last_name", ""),
+        })
+    return members
+
+
+def _live_verify_pks(pks: list[Any]) -> dict[Any, bool]:
+    """Email verification per workspace PK. Unverifiable PKs map to False."""
+    try:
+        payload = _live("POST", "/contacts/verify-email", json={"contact_pks": pks})
+    except RuntimeError:
+        return {pk: False for pk in pks}
+    verdicts: dict[Any, bool] = {}
+    items = payload if isinstance(payload, list) else (payload or {}).get("items", payload)
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict):
+            pk = item.get("contact_id", item.get("id", item.get("pk")))
+            status = str(item.get("status", item.get("result", ""))).lower()
+            verdicts[pk] = status in ("valid", "verified", "deliverable", "ok")
+    return verdicts
+
+
+def _live_create_sequence(name: str, list_id: int, owner_email: str) -> str:
+    payload = _live("POST", "/sequences", json={
+        "name": f"[RevForge TEST] {name}",
+        "user_email": owner_email,
+        "associated_list_id": list_id,
+    })
+    return _extract_id(payload, "sequence")
+
+
+def _live_enroll(sequence_id: str, list_id: int, pks: list[Any]) -> None:
+    _live("POST", f"/sequences/{sequence_id}/contacts",
+          json={"list_id": list_id, "contact_ids": pks})
+
+
+def _live_sequence_contacts(sequence_id: str) -> list[Any]:
+    payload = _live("GET", f"/sequences/{sequence_id}/contact-ids")
+    if isinstance(payload, dict):
+        return payload.get("contact_ids", [])
+    return payload if isinstance(payload, list) else []
+
+
+def archive_sequence(sequence_id: str) -> dict[str, Any]:
+    """Archive a sequence (cleanup helper for test runs)."""
+    if _use_mock():
+        return {"sequence_id": sequence_id, "status": "archived", "source": "mock"}
+    payload = _live("DELETE", f"/sequences/{sequence_id}")
+    return payload if isinstance(payload, dict) else {}
 
 
 # --------------------------------------------------------------------------

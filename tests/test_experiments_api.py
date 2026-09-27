@@ -7,7 +7,7 @@ client = TestClient(app)
 
 
 def _approved():
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     client.post("/api/hypotheses/H17/approve")
     return "H17"
@@ -42,7 +42,7 @@ def test_experiment_ids_increment():
 
 
 def test_candidate_cannot_be_tested():
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     r = client.post("/api/hypotheses/H17/test", json={})
     assert r.status_code == 400  # approve first

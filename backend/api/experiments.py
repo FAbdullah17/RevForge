@@ -25,7 +25,7 @@ def test_hypothesis(hyp_id: str, body: TestRequest):
     try:
         result = pipeline.build_experiment(hyp_id, body.treatment_n, body.control_n)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown hypothesis {hyp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown hypothesis '{hyp_id}' — it may have been reset; start over from Find patterns") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, **result}
@@ -43,7 +43,7 @@ def get_experiment(exp_id: str):
     for row in store.list_all("experiments"):
         if row.get("id") == exp_id:
             return {"experiment": row}
-    raise HTTPException(status_code=404, detail=f"unknown experiment {exp_id!r}")
+    raise HTTPException(status_code=404, detail=f"unknown experiment '{exp_id}' — it may have been reset; start over from Find patterns")
 
 
 @router.post("/api/experiments/{exp_id}/launch")
@@ -52,7 +52,7 @@ def launch_experiment(exp_id: str):
     try:
         return {"ok": True, **pipeline.launch(exp_id)}
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown experiment {exp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown experiment '{exp_id}' — it may have been reset; start over from Find patterns") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -63,7 +63,7 @@ def sync_outcomes(exp_id: str):
     try:
         return {"ok": True, **pipeline.sync_outcomes(exp_id)}
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown experiment {exp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown experiment '{exp_id}' — it may have been reset; start over from Find patterns") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -74,7 +74,7 @@ def evaluate_experiment(exp_id: str):
     try:
         return {"ok": True, **pipeline.evaluate(exp_id)}
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown experiment {exp_id!r}") from None
+        raise HTTPException(status_code=404, detail=f"unknown experiment '{exp_id}' — it may have been reset; start over from Find patterns") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -83,7 +83,7 @@ def evaluate_experiment(exp_id: str):
 def experiment_results(exp_id: str):
     """Outcome rows for one experiment (lift + verdict attached at evaluation)."""
     if not any(e.get("id") == exp_id for e in store.list_all("experiments")):
-        raise HTTPException(status_code=404, detail=f"unknown experiment {exp_id!r}")
+        raise HTTPException(status_code=404, detail=f"unknown experiment '{exp_id}' — it may have been reset; start over from Find patterns")
     return {"experiment_id": exp_id, "results": store.results_for(exp_id)}
 
 
@@ -105,7 +105,7 @@ def graph8_webhook(event: WebhookEvent):
         result = pipeline.ingest_event(event.model_dump())
     except KeyError:
         raise HTTPException(
-            status_code=404, detail=f"unknown campaign {event.campaign_id!r}") from None
+            status_code=404, detail=f"unknown campaign '{event.campaign_id}' — check the launched campaign id") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, **result}

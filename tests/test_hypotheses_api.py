@@ -7,7 +7,7 @@ client = TestClient(app)
 
 
 def _fresh():
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     return client.post("/api/discover", json={"source": "seed", "top_k": 3}).json()["hypotheses"]
 
 

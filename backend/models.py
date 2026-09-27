@@ -34,6 +34,7 @@ class Experiment(BaseModel):
     control: dict[str, Any] = Field(default_factory=dict)
     graph8_campaign_id: str = ""
     graph8_sequence_id: str = ""
+    credits_spent: int = 0
     status: Literal["draft", "launched", "observed", "evaluated"] = "draft"
     transport: str = ""
     started_at: str = Field(default_factory=utcnow)
@@ -81,5 +82,6 @@ class Account(BaseModel):
     persona_title: str
     outcome: Literal["won", "lost"]
     deal_size: int = 0
-    # Hidden test label. Discovery MUST NOT use as a feature.
-    is_h17_pattern: bool = False
+    # Hidden labels. Discovery MUST NOT use them as features.
+    is_h17_pattern: bool = False  # legacy seed files
+    is_hero_pattern: bool = False  # current generator

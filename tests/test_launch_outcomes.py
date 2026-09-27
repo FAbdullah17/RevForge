@@ -37,7 +37,7 @@ def test_build_result_validation():
 
 
 def _launched(exp_n=50):
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     client.post("/api/hypotheses/H17/approve")
     r = client.post("/api/hypotheses/H17/test",
@@ -79,7 +79,7 @@ def test_sync_writes_seeded_rows_and_observes():
 
 
 def test_sync_requires_launch():
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     client.post("/api/discover", json={"source": "seed", "top_k": 3})
     client.post("/api/hypotheses/H17/approve")
     exp_id = client.post("/api/hypotheses/H17/test", json={}).json()["experiment"]["id"]
@@ -112,5 +112,5 @@ def test_results_endpoint():
     assert len(rows) == 2
     assert client.get("/api/experiments/NOPE/results").status_code == 404
     # seed reset clears results too
-    client.post("/api/seed")
+    client.post("/api/seed?fixed=true")
     assert store.results_for(exp["id"]) == []

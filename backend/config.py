@@ -13,6 +13,9 @@ STATIC_DIR = FRONTEND_DIR / "static"
 
 G8_API_KEY = os.getenv("G8_API_KEY", "")
 G8_BASE_URL = os.getenv("G8_BASE_URL", "https://be.graph8.com/api/v1")
+
+#: Workspace owner email, required when creating sequencer sequences.
+G8_OWNER_EMAIL = os.getenv("G8_OWNER_EMAIL", "")
 MOCK_GRAPH8 = os.getenv("MOCK_GRAPH8", "1") == "1"
 MOCK_LLM = os.getenv("MOCK_LLM", "1") == "1"
 PORT = int(os.getenv("PORT", "8000"))
