@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RevForge — Autonomous Revenue Hypothesis Discovery</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+<div class="bg-gradient-to-r from-emerald-900 via-slate-900 to-sky-900 border-b border-slate-800">
+  <div class="max-w-4xl mx-auto p-8 pb-5">
+    <p class="text-xs tracking-widest text-emerald-300">GRAPH8 + REVFORGE · HACK DEMO</p>
+    <h1 class="text-2xl font-bold mt-1">Which customers buy the most? RevForge finds out — then proves it.</h1>
+    <p class="mt-2 text-sm text-slate-400">
+      <span id="health">checking backend…</span>
+      <span id="src" class="ml-2"></span>
+    </p>
+  </div>
+</div>
+
+<div class="max-w-4xl mx-auto p-8 pt-4">
+  <ol id="stepper" class="flex flex-wrap gap-1 text-xs"></ol>
+  <div id="next" class="mt-3 p-3 rounded-xl bg-emerald-900 border border-emerald-500 text-sm font-medium"></div>
+
+  <nav class="grid grid-cols-4 gap-2 mt-4" id="tabs">
+    <a href="#/discover" data-tab="discover" class="px-3 py-2 rounded-lg bg-emerald-600 font-semibold text-center text-sm">Find patterns</a>
+    <a href="#/hypothesis" data-tab="hypothesis" class="px-3 py-2 rounded-lg bg-slate-800 text-center text-sm">Review the bet</a>
+    <a href="#/test" data-tab="test" class="px-3 py-2 rounded-lg bg-slate-800 text-center text-sm">Run the test</a>
+    <a href="#/results" data-tab="results" class="px-3 py-2 rounded-lg bg-slate-800 text-center text-sm">Results</a>
+  </nav>
+
+  <div id="err" class="hidden mt-4 p-3 rounded-xl bg-red-900 border border-red-500 text-sm"></div>
+
+  <section id="view-discover" class="mt-4"></section>
+  <section id="view-hypothesis" class="hidden mt-4"></section>
+  <section id="view-test" class="hidden mt-4"></section>
+  <section id="view-results" class="hidden mt-4"></section>
+
+  <div class="mt-6 flex gap-3 items-center text-xs text-slate-500">
+    <button id="reset" class="px-3 py-1.5 rounded-lg bg-slate-700 text-slate-200">Reset demo data</button>
+    <span>History: SEEDED · Market: <span class="text-slate-300">MOCK_GRAPH8=0</span> is live · Outcomes: SEEDED fixtures</span>
+  </div>
+  <pre id="out" class="text-xs text-slate-600 whitespace-pre-wrap mt-1"></pre>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
